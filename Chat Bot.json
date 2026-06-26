@@ -1,0 +1,2445 @@
+{
+  "name": "Chat Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ce1266b5-8fc5-4103-bc8f-7f853f82efab",
+              "leftValue": "={{ $('Telegram Trigger').first().json.message?.voice?.file_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        46016,
+        15952
+      ],
+      "id": "718a0f9b-5deb-4317-9b70-9eaf174f9bed",
+      "name": "Voice or Text?"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "6ed2ab12-3d03-4090-9b4f-19380debc27a",
+              "name": "text",
+              "value": "={{ $json.text || $('Telegram Trigger').first().json.message?.text }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        46912,
+        16048
+      ],
+      "id": "06156de1-00a6-4a04-9f8e-09c4a56958f5",
+      "name": "Set Text From Message"
+    },
+    {
+      "parameters": {
+        "jsCode": "function normalizePersian(text) {\n  if (!text) return '';\n  return text\n    .replace(/\\u064a/g, '\\u06cc')\n    .replace(/\\u0643/g, '\\u06a9')\n    .replace(/[\\u0660-\\u0669]/g, d => '\\u0660\\u0661\\u0662\\u0663\\u0664\\u0665\\u0666\\u0667\\u0668\\u0669'.indexOf(d))\n    .replace(/[\\u06f0-\\u06f9]/g, d => '\\u06f0\\u06f1\\u06f2\\u06f3\\u06f4\\u06f5\\u06f6\\u06f7\\u06f8\\u06f9'.indexOf(d))\n    .replace(/\\u200c/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction getTextFallback() {\n  const nodes = [\n    'Prepare Pending Query For RAG',\n    'Set Category For RAG',\n    'Set Text From Message',\n    'Set Text From Voice',\n  ];\n  for (const name of nodes) {\n    try {\n      const v = $(name).first()?.json?.text;\n      if (v) return v;\n    } catch (e) {}\n  }\n  return $('Telegram Trigger').first().json.message?.text || '';\n}\n\nfunction getShopId() {\n  const nodes = [\n    'Set Shop ID From Session',\n    'Set Pending Shop ID',\n    'Prepare Pending Query For RAG',\n    'Set Category For RAG',\n    'Save Chat Session',\n    'Get Pending Query',\n  ];\n  for (const name of nodes) {\n    try {\n      const v = $(name).first()?.json?.shop_id;\n      if (v) return v;\n    } catch (e) {}\n  }\n  try {\n    const v = $('Lookup Chat Session').first()?.json?.shop_id;\n    if (v) return v;\n  } catch (e) {}\n  return null;\n}\n\nfunction getChatId() {\n  return (\n    $('Telegram Trigger').first().json.message?.chat?.id ??\n    $('Telegram Trigger').first().json.callback_query?.message?.chat?.id ??\n    (() => { try { return $('Parse Shop Selection').first().json.chat_id; } catch (e) { return null; } })() ??\n    (() => { try { return $('Extract User Query').first().json.chat_id; } catch (e) { return null; } })()\n  );\n}\n\nconst items = $input.all();\nconst fallbackShop = getShopId();\nconst fallbackText = getTextFallback();\n\nfor (const item of items) {\n  let text = item.json.text;\n  if (text === undefined || text === null || text === '') {\n    text = fallbackText;\n  }\n  item.json.normalized = normalizePersian(text);\n  item.json.shop_id = item.json.shop_id || fallbackShop;\n  item.json.chat_id = item.json.chat_id || getChatId();\n}\n\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        47136,
+        15952
+      ],
+      "id": "243cd44e-f84b-49fa-b8ee-f5796d17ed0c",
+      "name": "Normalize"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=<GEMINI_API_KEY>",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"models/gemini-embedding-001\",\n  \"content\": {\n    \"parts\": [{ \"text\": {{ JSON.stringify($('Prepare Query For Embedding').first().json.normalized) }} }]\n  }\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        47360,
+        15952
+      ],
+      "id": "7ec2df85-afef-4d08-b785-5b11888181b6",
+      "name": "Gemini Embed Query"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://aaugvkrnnftgmorjpnoj.supabase.co/rest/v1/rpc/match_documents",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"query_embedding\": {{ JSON.stringify($('Gemini Embed Query').first().json.embedding.values) }},\n  \"filter_shop_id\": \"{{ $('Normalize').first().json.shop_id }}\",\n  \"match_count\": 5\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        47584,
+        15952
+      ],
+      "id": "36218a83-2131-4046-8714-8ef2c9e0a71b",
+      "name": "Supabase Retrieve",
+      "alwaysOutputData": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "0CmT4HAyc6wYbZx1",
+          "name": "Supabase Service Role"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "db20723e-9d4e-46b5-9711-6bd809ddb0fb",
+              "leftValue": "={{ $json.hasMatches }}",
+              "rightValue": 0.7,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        48032,
+        15952
+      ],
+      "id": "07269493-cef2-4616-a0a6-cc370f21b1ee",
+      "name": "Similarity Gate"
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message",
+          "callback_query"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        44464,
+        16192
+      ],
+      "id": "f3d9007b-a7ec-48a6-bbca-abbe72d314b2",
+      "name": "Telegram Trigger",
+      "webhookId": "89a468e8-e9e7-4028-8ba0-50fe522a5fa8",
+      "credentials": {
+        "telegramApi": {
+          "id": "zhQHcOnlhrQxUCJ7",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/sendMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": {{ $('Aggregate & Filter Matches').first().json.chat_id }},\n  \"text\": \"متأسفم، اطلاع دقیقی در این مورد ندارم. لطفاً با پشتیبانی تماس بگیرید.\",\n  \"reply_markup\": {\n    \"inline_keyboard\": [\n      [{\"text\": \"📞 پشتیبانی\", \"callback_data\": \"support\"}],\n      [{\"text\": \"🔄 تغییر فروشگاه\", \"callback_data\": \"/changeshop\"}],\n      [{\"text\": \"❓ سوالات متداول\", \"callback_data\": \"faq\"}]\n    ]\n  }\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        48256,
+        16048
+      ],
+      "id": "d40e5bb7-a6e3-42ca-b0f9-fca7746c37e6",
+      "name": "Send Fallback"
+    },
+    {
+      "parameters": {
+        "jsCode": "const contextBlock = $json.matches\n  .map((m, i) => `${i + 1}. ${m.content}`)\n  .join('\\n\\n');\n\nreturn [{\n  json: {\n    context: contextBlock,\n    user_question: $json.user_question,\n    original_query: $json.original_query || $json.user_question,\n    chat_id: $json.chat_id\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        48256,
+        15856
+      ],
+      "id": "08f6831b-530e-43ed-9197-d86f31028c89",
+      "name": "Build Context"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"llama-3.3-70b-versatile\",\n  \"temperature\": 0.2,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": {{ JSON.stringify(\"شما دستیار فروش فروشگاه هستید. فقط بر اساس «اطلاعات موجود» پاسخ بده. اگر پاسخ در اطلاعات نبود، بگو اطلاع دقیقی ندارم و مشتری را به پشتیبانی ارجاع بده. قیمت یا موجودی را هرگز حدس نزن.\\n\\nاطلاعات موجود:\\n\" + $('Build Context').first().json.context) }}\n    },\n    {\n      \"role\": \"user\",\n      \"content\": {{ JSON.stringify($('Build Context').first().json.user_question) }}\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        48480,
+        15856
+      ],
+      "id": "3d99a523-9a14-4737-9611-3448cab920d3",
+      "name": "Groq Llama",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "apMxsjOLXISfOaf7",
+          "name": "Header Auth account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Build Context').first().json.chat_id }}",
+        "text": "={{ $('Groq Llama').first().json.choices[0].message.content }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        48704,
+        15856
+      ],
+      "id": "28f73920-2e0c-4654-8807-7194a8e1fc1b",
+      "name": "Send Answer",
+      "webhookId": "5cf5eda1-c66a-481d-aea6-17633df0c400",
+      "credentials": {
+        "telegramApi": {
+          "id": "zhQHcOnlhrQxUCJ7",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $('Telegram Trigger').first().json.message?.voice?.file_id ?? $('Prepare Pending Query For RAG').first().json.pending_voice_file_id }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        46240,
+        15856
+      ],
+      "id": "fe94c82a-7f54-4cbe-9656-e31b9e8eb3af",
+      "name": "Get Voice File",
+      "webhookId": "b16b9891-a3a7-4474-863d-5b5f05f011b6",
+      "credentials": {
+        "telegramApi": {
+          "id": "zhQHcOnlhrQxUCJ7",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/audio/transcriptions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            },
+            {
+              "name": "model",
+              "value": "whisper-large-v3"
+            },
+            {
+              "name": "language",
+              "value": "fa"
+            },
+            {
+              "name": "response_format",
+              "value": "json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        46688,
+        15856
+      ],
+      "id": "c5f6e6a9-4916-47ef-b94f-2572045f3e2b",
+      "name": "Groq Whisper",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "apMxsjOLXISfOaf7",
+          "name": "Header Auth account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "96ac7bff-0267-4f1d-9e3b-18762536b04b",
+              "name": "text",
+              "value": "={{ $json.text }}",
+              "type": "string"
+            },
+            {
+              "id": "3dfc24e5-f5c1-4e2c-86ab-914aed177582",
+              "name": "chat_id",
+              "value": "={{\n$('Telegram Trigger').first().json.message?.chat?.id ??\n$('Telegram Trigger').first().json.callback_query?.message?.chat?.id ??\n$('Set Pending Shop ID').first().json.chat_id\n}}",
+              "type": "string"
+            },
+            {
+              "id": "5d4a1f13-ac4f-4180-a5d7-e23391d9c28d",
+              "name": "shop_id",
+              "value": "={{ $('Set Shop ID From Session').first().json.shop_id || $('Set Pending Shop ID').first().json.shop_id || $('Lookup Chat Session').first().json.shop_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        46912,
+        15856
+      ],
+      "id": "1900cad4-b6ee-4f62-8da9-ad0b1db3036b",
+      "name": "Set Text From Voice"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nfor (const item of items) {\n  if (item.binary && item.binary.data) {\n    item.binary.data.fileName = 'voice.ogg';\n    item.binary.data.fileExtension = 'ogg';\n    item.binary.data.mimeType = 'audio/ogg';\n  }\n}\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        46464,
+        15856
+      ],
+      "id": "d491fe8b-1ff8-4c08-bff4-d7f0f1df8d63",
+      "name": "Fix Audio Filename"
+    },
+    {
+      "parameters": {
+        "jsCode": "const SIMILARITY_THRESHOLD = 0.7;\n\nconst allMatches = $input.all().map(item => item.json);\nconst relevant = allMatches\n  .filter(m => (m.similarity ?? 0) >= SIMILARITY_THRESHOLD)\n  .sort((a, b) => b.similarity - a.similarity);\n\nlet userQuestion = $('Normalize').first().json.normalized;\nlet originalQuery = userQuestion;\ntry {\n  const prep = $('Prepare Query For Embedding').first().json;\n  if (prep.normalized) userQuestion = prep.normalized;\n  if (prep.original_query) originalQuery = prep.original_query;\n} catch (e) {}\n\nreturn [{\n  json: {\n    matches: relevant,\n    hasMatches: relevant.length > 0,\n    chat_id: $('Normalize').first().json.chat_id,\n    user_question: userQuestion,\n    original_query: originalQuery\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        47808,
+        15952
+      ],
+      "id": "af44bad9-a71c-4cee-8d0b-4f1b25c0f64c",
+      "name": "Aggregate & Filter Matches"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "1d4e030f-ab49-42b0-91f5-da63daf2255d",
+              "leftValue": "={{ $json.callback_query }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        44688,
+        16192
+      ],
+      "id": "758eae61-8dcc-4022-8093-ac7b47f518dc",
+      "name": "Is Callback Query?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const cq = $json.callback_query;\nreturn [{\n  json: {\n    chat_id: cq.message.chat.id,\n    data: cq.data,\n    callback_query_id: cq.id\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        44768,
+        16528
+      ],
+      "id": "603682ad-0906-4951-a0f2-93878013db67",
+      "name": "Parse Shop Selection"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://aaugvkrnnftgmorjpnoj.supabase.co/rest/v1/chat_sessions?on_conflict=chat_id",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n    \"chat_id\": {{ $('Parse Shop Selection').first().json.chat_id }},\n    \"shop_id\": \"{{ $('Parse Shop Selection').first().json.data }}\"\n  }",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        45072,
+        16560
+      ],
+      "id": "8431e237-16ce-4fc3-9f7d-74b7a7601db4",
+      "name": "Save Chat Session",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "0CmT4HAyc6wYbZx1",
+          "name": "Supabase Service Role"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "callback",
+        "queryId": "={{ $('Parse Shop Selection').first().json.callback_query_id }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        45312,
+        16480
+      ],
+      "id": "86ace924-b149-4a1e-92ce-d6da73f5b66f",
+      "name": "Answer Callback Query",
+      "webhookId": "67d88e1d-f137-40d0-a425-2437bd331bfe",
+      "credentials": {
+        "telegramApi": {
+          "id": "zhQHcOnlhrQxUCJ7",
+          "name": "Telegram account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/sendMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": {{ $('Parse Shop Selection').first().json.chat_id }},\n  \"text\": \"✅ فروشگاه انتخاب شد. حالا می‌توانید سوال خود را بپرسید.\",\n  \"reply_markup\": {\n    \"inline_keyboard\": [\n      [\n        {\"text\": \"کفش👟\", \"callback_data\": \"search:کفش\"},\n        {\"text\": \"لباس👕\", \"callback_data\": \"search:لباس\"},\n        {\"text\": \"لوازم جانبی🎒\", \"callback_data\": \"search:لوازم جانبی\"}\n      ]\n    ]\n  }\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        45584,
+        16512
+      ],
+      "id": "6fe82d86-2bf5-4255-bd78-aa1869bfeb25",
+      "name": "Send Shop Confirmed"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "8fdcbf28-659e-4f02-854f-6bd9ad5505e4",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "/changeshop",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        44912,
+        16096
+      ],
+      "id": "dbc7e491-91dd-4ffc-8f40-08afde3af267",
+      "name": "Is /changeshop Command?"
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "=https://aaugvkrnnftgmorjpnoj.supabase.co/rest/v1/chat_sessions?chat_id=eq.{{\n$('Telegram Trigger').first().json.message?.chat?.id ??\n$('Telegram Trigger').first().json.callback_query?.message?.chat?.id\n}}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        45360,
+        16320
+      ],
+      "id": "a75c9695-26f0-44a1-b8da-982bf523f431",
+      "name": "Clear Chat Session",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "0CmT4HAyc6wYbZx1",
+          "name": "Supabase Service Role"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://aaugvkrnnftgmorjpnoj.supabase.co/rest/v1/chat_sessions?chat_id=eq.{{\n$('Telegram Trigger').first().json.message?.chat?.id ??\n$('Telegram Trigger').first().json.callback_query?.message?.chat?.id\n}}&select=chat_id,shop_id",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        45136,
+        16000
+      ],
+      "id": "4e52fb6d-cf1d-4714-abf0-b3ce8ace4a6f",
+      "name": "Lookup Chat Session",
+      "alwaysOutputData": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "0CmT4HAyc6wYbZx1",
+          "name": "Supabase Service Role"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://aaugvkrnnftgmorjpnoj.supabase.co/rest/v1/shops?select=shop_id,name&order=name",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        45792,
+        16144
+      ],
+      "id": "2d355ee5-dc9a-41d0-ade1-67f46562ad12",
+      "name": "Fetch Shops",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "0CmT4HAyc6wYbZx1",
+          "name": "Supabase Service Role"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "27d193d8-c3a8-45fb-9aa2-9934ab7dc596",
+              "leftValue": "={{ $json.shop_id }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        45568,
+        16000
+      ],
+      "id": "9ada1de7-56ee-4c0d-b527-b486dbcdb269",
+      "name": "Has Active Session?"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "74c957fa-0747-4577-a679-061e9588459e",
+              "name": "shop_id",
+              "value": "={{ $json.shop_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        45792,
+        15952
+      ],
+      "id": "0fe5086a-95e3-4238-9bd6-05e35bd2f7c5",
+      "name": "Set Shop ID From Session"
+    },
+    {
+      "parameters": {
+        "jsCode": "const shops = $input.all().map(i => i.json);\n\nconst keyboard = shops.map(s => [\n  {\n    text: s.name,\n    callback_data: s.shop_id\n  }\n]);\n\nreturn [{\n  json: {\n    chat_id:\n      $('Telegram Trigger').first().json.message?.chat?.id ??\n      $('Telegram Trigger').first().json.callback_query?.message?.chat?.id,\n    reply_markup: {\n      inline_keyboard: keyboard\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        46016,
+        16272
+      ],
+      "id": "31a15b91-1cb6-4658-b530-d0a2e7803ad8",
+      "name": "Build Shop Keyboard"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/sendMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": {{ $json.chat_id }},\n  \"text\": \"🤖 به دانابات خوش آمدید!\\n\\nلطفاً فروشگاه مورد نظر را انتخاب کنید:\",\n  \"reply_markup\": {{ JSON.stringify($json.reply_markup) }}\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        46240,
+        16272
+      ],
+      "id": "bc05f33c-586f-4b27-aab8-a43cbe08d081",
+      "name": "Send Shop Picker"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "/start",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        45136,
+        16192
+      ],
+      "id": "b45aab29-b94b-45d4-bc18-4a331ade93fe",
+      "name": "Is /start Command?"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendChatAction",
+        "chatId": "={{\n$('Telegram Trigger').first().json.message?.chat?.id ??\n$('Telegram Trigger').first().json.callback_query?.message?.chat?.id\n}}",
+        "action": "typing"
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        46464,
+        16144
+      ],
+      "id": "f26dfb34-65c5-4e72-8b81-497108d95393",
+      "name": "Send Typing Action",
+      "credentials": {
+        "telegramApi": {
+          "id": "zhQHcOnlhrQxUCJ7",
+          "name": "Telegram account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/sendChatAction",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": {{ $('Telegram Trigger').first().json.message?.chat?.id ?? $('Telegram Trigger').first().json.callback_query?.message?.chat?.id }},\n  \"action\": \"upload_voice\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        46112,
+        15744
+      ],
+      "id": "6d30cebd-2760-4f5c-ae8b-b86efed18181",
+      "name": "Send Upload Voice Action",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "52857418-2e02-4be7-ba84-3c8273618de0",
+              "leftValue": "={{ $json.shop_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        47232,
+        16112
+      ],
+      "id": "5f3d1ace-99f1-4a7f-a64d-18e14fbb365a",
+      "name": "Check Active Session"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://aaugvkrnnftgmorjpnoj.supabase.co/rest/v1/rpc/upsert_pending_query",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"p_chat_id\": {{ $json.chat_id }},\n  \"p_query\": {{ JSON.stringify($json.pending_query) }},\n  \"p_voice_file_id\": {{ JSON.stringify($json.voice_file_id || null) }}\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        47408,
+        16304
+      ],
+      "id": "f5e71d17-35dd-4680-93a8-272e2d9e1060",
+      "name": "Save Pending Query",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "0CmT4HAyc6wYbZx1",
+          "name": "Supabase Service Role"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://aaugvkrnnftgmorjpnoj.supabase.co/rest/v1/rpc/get_recent_chat_history",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"p_chat_id\": {{ $('Normalize').first().json.chat_id }},\n  \"p_limit\": 4\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        47408,
+        16112
+      ],
+      "id": "d5298eb8-33a9-4347-afe1-26007eb08566",
+      "name": "Fetch Chat History",
+      "alwaysOutputData": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "0CmT4HAyc6wYbZx1",
+          "name": "Supabase Service Role"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const history = $input.all().map(item => item.json);\nconst originalQuery = $('Normalize').first().json.normalized;\n\nif (!history.length || !history.some(h => h.content && h.content.trim())) {\n  return [{ json: { bypass: true, original_query: originalQuery } }];\n}\n\nconst historyStr = [...history].reverse()\n  .map(h => `${h.role === 'user' ? 'کاربر' : 'دستیار'}: ${h.content}`)\n  .join('\\n');\n\nreturn [{ json: { bypass: false, original_query: originalQuery, history: historyStr } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        47568,
+        16112
+      ],
+      "id": "44dbb7e3-3891-421f-9a2d-44b7ecd7f156",
+      "name": "Rewrite Query Prompt"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ce5179cb-17ab-431c-a11c-d784a0d9396e",
+              "leftValue": "={{ $json.bypass }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        47728,
+        16112
+      ],
+      "id": "aa54056d-ec9a-42dd-9adc-3490f0de4324",
+      "name": "Bypass Rewrite?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"llama-3.3-70b-versatile\",\n  \"temperature\": 0.1,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"شما دستیاری هستید که آخرین پرسش کاربر را به زبان فارسی بر اساس تاریخچه گفتگو بازنویسی می‌کنید تا خودکفا و برای جستجو در پایگاه داده بردار مناسب باشد. اگر پرسش آخر کاربر خودکفا است و به پیام‌های قبلی اشاره ندارد (مثلاً رنگ‌های آن، موجودی این و...)، دقیقاً همان را برگردانید. هیچ توضیح یا مقدمه‌ای اضافه نکنید، فقط پرسش بازنویسی شده را به فارسی خروجی دهید.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": {{ JSON.stringify(\"تاریخچه گفتگو:\\n\" + $json.history + \"\\n\\nآخرین پرسش:\\n\" + $json.original_query) }}\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        47888,
+        16064
+      ],
+      "id": "91abff9a-f232-4702-aebb-62329db62b62",
+      "name": "Rewrite Query LLM",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "apMxsjOLXISfOaf7",
+          "name": "Header Auth account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://aaugvkrnnftgmorjpnoj.supabase.co/rest/v1/chat_history",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": {{ $('Normalize').first().json.chat_id }},\n  \"role\": \"user\",\n  \"message\": {{ JSON.stringify($('Normalize').first().json.normalized) }}\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        48096,
+        16112
+      ],
+      "id": "859cc69c-cfa2-4c55-95b1-7f3eb1449e54",
+      "name": "Save User Message DB",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "0CmT4HAyc6wYbZx1",
+          "name": "Supabase Service Role"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "let query = $('Normalize').first().json.normalized;\nconst original = query;\ntry {\n  const rewritten = $('Rewrite Query LLM').first().json.choices[0].message.content;\n  if (rewritten && rewritten.trim()) query = rewritten.trim();\n} catch (e) {}\n\nreturn [{\n  json: {\n    normalized: query,\n    original_query: original,\n    shop_id: $('Normalize').first().json.shop_id,\n    chat_id: $('Normalize').first().json.chat_id\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        48256,
+        16112
+      ],
+      "id": "94492246-13d0-421d-81b2-32225770f186",
+      "name": "Prepare Query For Embedding"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://aaugvkrnnftgmorjpnoj.supabase.co/rest/v1/chat_history",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": {{ $('Build Context').first().json.chat_id }},\n  \"role\": \"assistant\",\n  \"message\": {{ JSON.stringify($('Groq Llama').first().json.choices[0].message.content) }}\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        48816,
+        15856
+      ],
+      "id": "0643ce4a-08f2-4ab3-8825-8baa5896a94a",
+      "name": "Save Assistant Message DB",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "0CmT4HAyc6wYbZx1",
+          "name": "Supabase Service Role"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://aaugvkrnnftgmorjpnoj.supabase.co/rest/v1/chat_history",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": {{ $('Normalize').first().json.chat_id }},\n  \"role\": \"assistant\",\n  \"message\": \"متأسفم، اطلاع دقیقی در این مورد ندارم. لطفاً با پشتیبانی تماس بگیرید.\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        48416,
+        16208
+      ],
+      "id": "47a0545c-6ddc-4bb0-b345-2b4c4cfeab88",
+      "name": "Save Fallback Message DB",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "0CmT4HAyc6wYbZx1",
+          "name": "Supabase Service Role"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "a3a69f35-1ba1-4441-9535-16260e1174b7",
+                    "leftValue": "={{ $('Parse Shop Selection').first().json.data }}",
+                    "rightValue": "/changeshop",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "606e504a-3361-42df-a277-c9f3d2acea63",
+                    "leftValue": "={{ $('Parse Shop Selection').first().json.data }}",
+                    "rightValue": "faq",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "2cfc95bb-7cf3-4521-93bf-2e67841d8990",
+                    "leftValue": "={{ $('Parse Shop Selection').first().json.data }}",
+                    "rightValue": "support",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "2cfc95bb-7cf3-4521-93bf-2e67841d8990",
+                    "leftValue": "={{ $('Parse Shop Selection').first().json.data }}",
+                    "rightValue": "search:",
+                    "operator": {
+                      "type": "string",
+                      "operation": "startsWith"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        44832,
+        16848
+      ],
+      "id": "73e34cea-3d9c-429e-863c-ff41acc538d1",
+      "name": "Callback Router"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/sendMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": {{ $('Parse Shop Selection').first().json.chat_id }},\n  \"text\": \"❓ *سوالات متداول (FAQs):*\\n\\n۱. *چگونه خرید کنم؟*\\nکافیست نام یا تصویر محصول مورد نظر خود را در چت بفرستید تا موجودی و قیمت آن را بررسی کنم.\\n\\n۲. *هزینه و زمان ارسال چقدر است؟*\\nارسال برای خریدهای بالای ۱ میلیون تومان رایگان است و معمولاً بین ۲ تا ۴ روز کاری زمان می‌برد.\\n\\n۳. *شرایط تعویض یا مرجوعی چیست؟*\\nتا ۷ روز پس از دریافت کالا، در صورت پلمپ بودن و عدم استفاده می‌توانید آن را تعویض یا مرجوع کنید.\\n\\n📞 *پشتیبانی:* +98211111111\\n\\nاگر سوال دیگری دارید، می‌توانید مستقیم بپرسید یا با پشتیبانی تماس بگیرید. 👇\",\n  \"parse_mode\": \"Markdown\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        45312,
+        16768
+      ],
+      "id": "39569002-058f-4516-af0b-ebc95611944c",
+      "name": "Send FAQ Message"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/sendMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": {{ $('Parse Shop Selection').first().json.chat_id }},\n  \"text\": \"📞 *پشتیبانی دانابات*\\n\\nبرای ارتباط با پشتیبانی با شماره زیر تماس بگیرید:\\n\\n*+98211111111*\\n\\nساعات پاسخگویی: ۹ تا ۲۱\",\n  \"parse_mode\": \"Markdown\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        45312,
+        16840
+      ],
+      "id": "a9b8c7d6-e5f4-3210-abcd-ef9876543210",
+      "name": "Send Support Message"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ps = $('Parse Shop Selection').first().json;\nconst category = ps.data.replace('search:', '');\nreturn [{\n  json: {\n    text: category,\n    chat_id: ps.chat_id\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        45312,
+        16912
+      ],
+      "id": "472f02aa-b359-4857-812e-addcb5636277",
+      "name": "Prepare Category Search"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "0d2cb2f1-c30c-4ec8-bf3a-7f61c6b54131",
+              "leftValue": "={{ $('Get Pending Query').first().json.pending_query }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        45424,
+        16656
+      ],
+      "id": "45e9ca49-170f-4211-b7f1-1359b9c8edc8",
+      "name": "Check Pending Query"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://aaugvkrnnftgmorjpnoj.supabase.co/rest/v1/chat_sessions?chat_id=eq.{{ $('Parse Shop Selection').first().json.chat_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"pending_query\": null,\n  \"pending_voice_file_id\": null\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        45712,
+        16768
+      ],
+      "id": "1de0d2a5-e88d-43aa-ac39-a2a9767c0a9f",
+      "name": "Clear Pending Query DB",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "0CmT4HAyc6wYbZx1",
+          "name": "Supabase Service Role"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const pending = $('Get Pending Query').first().json;\nreturn [{\n  json: {\n    text: pending.pending_query,\n    shop_id: pending.shop_id || $('Save Chat Session').first().json?.shop_id,\n    chat_id: pending.chat_id || $('Parse Shop Selection').first().json.chat_id,\n    pending_voice_file_id: pending.pending_voice_file_id\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        45904,
+        16768
+      ],
+      "id": "54d548ec-4722-4718-a7b8-444346580be3",
+      "name": "Prepare Pending Query For RAG"
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg = $('Telegram Trigger').first().json.message;\nconst chat_id = msg?.chat?.id;\n\nlet pending_query = null;\nlet voice_file_id = null;\n\nif (msg?.voice?.file_id) {\n  pending_query = '__VOICE__';\n  voice_file_id = msg.voice.file_id;\n} else if (msg?.text) {\n  pending_query = msg.text;\n}\n\nreturn [{ json: { chat_id, pending_query, voice_file_id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        45792,
+        16192
+      ],
+      "id": "e1a2b3c4-d5e6-4789-a012-3456789abcde",
+      "name": "Extract User Query"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "has-pending-q",
+              "leftValue": "={{ $json.pending_query }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        46016,
+        16192
+      ],
+      "id": "f2b3c4d5-e6f7-4890-b123-456789abcdef",
+      "name": "Should Save Pending?"
+    },
+    {
+      "parameters": {
+        "url": "=https://aaugvkrnnftgmorjpnoj.supabase.co/rest/v1/chat_sessions?chat_id=eq.{{ $('Parse Shop Selection').first().json.chat_id }}&select=chat_id,shop_id,pending_query,pending_voice_file_id",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        45248,
+        16560
+      ],
+      "id": "a3b4c5d6-e7f8-4901-c234-56789abcdef0",
+      "name": "Get Pending Query",
+      "alwaysOutputData": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "0CmT4HAyc6wYbZx1",
+          "name": "Supabase Service Role"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "is-voice-pending",
+              "leftValue": "={{ $('Get Pending Query').first().json.pending_query }}",
+              "rightValue": "__VOICE__",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        45600,
+        16768
+      ],
+      "id": "b4c5d6e7-f890-4012-d345-6789abcdef01",
+      "name": "Is Pending Voice?"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ps1",
+              "name": "shop_id",
+              "value": "={{ $('Get Pending Query').first().json.shop_id || $('Parse Shop Selection').first().json.data }}",
+              "type": "string"
+            },
+            {
+              "id": "ps2",
+              "name": "chat_id",
+              "value": "={{ $('Parse Shop Selection').first().json.chat_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        45824,
+        16768
+      ],
+      "id": "c5d6e7f8-9012-4123-e456-789abcdef012",
+      "name": "Set Pending Shop ID"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendChatAction",
+        "chatId": "={{ $('Parse Shop Selection').first().json.chat_id }}",
+        "action": "typing"
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        46048,
+        16896
+      ],
+      "id": "d6e7f890-1234-4234-f567-89abcdef0123",
+      "name": "Send Typing Pending RAG",
+      "credentials": {
+        "telegramApi": {
+          "id": "zhQHcOnlhrQxUCJ7",
+          "name": "Telegram account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/sendChatAction",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": {{ $('Parse Shop Selection').first().json.chat_id }},\n  \"action\": \"record_voice\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        46048,
+        16640
+      ],
+      "id": "e7f89012-3456-4345-a678-9abcdef01234",
+      "name": "Send Record Voice Pending",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendChatAction",
+        "chatId": "={{ $('Build Context').first().json.chat_id }}",
+        "action": "typing"
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        48352,
+        15856
+      ],
+      "id": "f8901234-5678-4456-b789-abcdef012345",
+      "name": "Send Typing Before LLM",
+      "credentials": {
+        "telegramApi": {
+          "id": "zhQHcOnlhrQxUCJ7",
+          "name": "Telegram account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://aaugvkrnnftgmorjpnoj.supabase.co/rest/v1/chat_sessions?chat_id=eq.{{ $('Prepare Category Search').first().json.chat_id }}&select=chat_id,shop_id",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        45360,
+        16912
+      ],
+      "id": "01234567-8901-4789-e012-cdef01234567",
+      "name": "Lookup Category Session",
+      "alwaysOutputData": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "0CmT4HAyc6wYbZx1",
+          "name": "Supabase Service Role"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cat1",
+              "name": "text",
+              "value": "={{ $('Prepare Category Search').first().json.text }}",
+              "type": "string"
+            },
+            {
+              "id": "cat2",
+              "name": "shop_id",
+              "value": "={{ $json.shop_id }}",
+              "type": "string"
+            },
+            {
+              "id": "cat3",
+              "name": "chat_id",
+              "value": "={{ $('Prepare Category Search').first().json.chat_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        45568,
+        16912
+      ],
+      "id": "89012345-6789-4567-c890-abcdef0123456",
+      "name": "Set Category For RAG"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendChatAction",
+        "chatId": "={{ $('Set Category For RAG').first().json.chat_id }}",
+        "action": "typing"
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        45792,
+        16912
+      ],
+      "id": "90123456-7890-4678-d901-bcdef01234567",
+      "name": "Send Category Typing",
+      "credentials": {
+        "telegramApi": {
+          "id": "zhQHcOnlhrQxUCJ7",
+          "name": "Telegram account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Voice or Text?": {
+      "main": [
+        [
+          {
+            "node": "Send Upload Voice Action",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Typing Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Text From Message": {
+      "main": [
+        [
+          {
+            "node": "Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize": {
+      "main": [
+        [
+          {
+            "node": "Fetch Chat History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Embed Query": {
+      "main": [
+        [
+          {
+            "node": "Supabase Retrieve",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase Retrieve": {
+      "main": [
+        [
+          {
+            "node": "Aggregate & Filter Matches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Similarity Gate": {
+      "main": [
+        [
+          {
+            "node": "Build Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Is Callback Query?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Context": {
+      "main": [
+        [
+          {
+            "node": "Send Typing Before LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Llama": {
+      "main": [
+        [
+          {
+            "node": "Send Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Voice File": {
+      "main": [
+        [
+          {
+            "node": "Fix Audio Filename",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Whisper": {
+      "main": [
+        [
+          {
+            "node": "Set Text From Voice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Text From Voice": {
+      "main": [
+        [
+          {
+            "node": "Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fix Audio Filename": {
+      "main": [
+        [
+          {
+            "node": "Groq Whisper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate & Filter Matches": {
+      "main": [
+        [
+          {
+            "node": "Similarity Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Callback Query?": {
+      "main": [
+        [
+          {
+            "node": "Parse Shop Selection",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is /changeshop Command?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Shop Selection": {
+      "main": [
+        [
+          {
+            "node": "Answer Callback Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Chat Session": {
+      "main": [
+        [
+          {
+            "node": "Get Pending Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Answer Callback Query": {
+      "main": [
+        [
+          {
+            "node": "Callback Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is /changeshop Command?": {
+      "main": [
+        [
+          {
+            "node": "Clear Chat Session",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is /start Command?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Chat Session": {
+      "main": [
+        [
+          {
+            "node": "Fetch Shops",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Chat Session": {
+      "main": [
+        [
+          {
+            "node": "Has Active Session?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Shops": {
+      "main": [
+        [
+          {
+            "node": "Build Shop Keyboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Active Session?": {
+      "main": [
+        [
+          {
+            "node": "Set Shop ID From Session",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extract User Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Shop ID From Session": {
+      "main": [
+        [
+          {
+            "node": "Voice or Text?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Shop Keyboard": {
+      "main": [
+        [
+          {
+            "node": "Send Shop Picker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is /start Command?": {
+      "main": [
+        [
+          {
+            "node": "Clear Chat Session",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Lookup Chat Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Category Search": {
+      "main": [
+        [
+          {
+            "node": "Lookup Category Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Pending Query": {
+      "main": [
+        [
+          {
+            "node": "Is Pending Voice?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Shop Confirmed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Pending Query DB": {
+      "main": [
+        [
+          {
+            "node": "Send Typing Pending RAG",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Pending Query For RAG": {
+      "main": [
+        [
+          {
+            "node": "Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Upload Voice Action": {
+      "main": [
+        [
+          {
+            "node": "Get Voice File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Typing Action": {
+      "main": [
+        [
+          {
+            "node": "Set Text From Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Active Session": {
+      "main": [
+        [
+          {
+            "node": "Fetch Chat History",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Save Pending Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Pending Query": {
+      "main": [
+        [
+          {
+            "node": "Fetch Shops",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Chat History": {
+      "main": [
+        [
+          {
+            "node": "Rewrite Query Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rewrite Query Prompt": {
+      "main": [
+        [
+          {
+            "node": "Bypass Rewrite?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bypass Rewrite?": {
+      "main": [
+        [
+          {
+            "node": "Save User Message DB",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rewrite Query LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rewrite Query LLM": {
+      "main": [
+        [
+          {
+            "node": "Save User Message DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save User Message DB": {
+      "main": [
+        [
+          {
+            "node": "Prepare Query For Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Query For Embedding": {
+      "main": [
+        [
+          {
+            "node": "Gemini Embed Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Answer": {
+      "main": [
+        [
+          {
+            "node": "Save Assistant Message DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Fallback": {
+      "main": [
+        [
+          {
+            "node": "Save Fallback Message DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Callback Router": {
+      "main": [
+        [
+          {
+            "node": "Clear Chat Session",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send FAQ Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Support Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Category Search",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Save Chat Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract User Query": {
+      "main": [
+        [
+          {
+            "node": "Should Save Pending?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Save Pending?": {
+      "main": [
+        [
+          {
+            "node": "Save Pending Query",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Shops",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Pending Query": {
+      "main": [
+        [
+          {
+            "node": "Check Pending Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Pending Voice?": {
+      "main": [
+        [
+          {
+            "node": "Send Record Voice Pending",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Clear Pending Query DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Record Voice Pending": {
+      "main": [
+        [
+          {
+            "node": "Set Pending Shop ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Pending Shop ID": {
+      "main": [
+        [
+          {
+            "node": "Get Voice File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Typing Pending RAG": {
+      "main": [
+        [
+          {
+            "node": "Prepare Pending Query For RAG",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Typing Before LLM": {
+      "main": [
+        [
+          {
+            "node": "Groq Llama",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Category Session": {
+      "main": [
+        [
+          {
+            "node": "Set Category For RAG",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Category For RAG": {
+      "main": [
+        [
+          {
+            "node": "Send Category Typing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Category Typing": {
+      "main": [
+        [
+          {
+            "node": "Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "cx-fixes-v2-complete",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "0b831f78fcfdb49799a9474bd89c147b004db4006a5490c4b755b2bf552b9fd7"
+  },
+  "nodeGroups": [],
+  "id": "lBMrn8PCYNUx0wtx",
+  "tags": []
+}

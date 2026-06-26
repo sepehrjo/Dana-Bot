@@ -1,0 +1,204 @@
+{
+  "name": "Ingestion",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Load Shop Data",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "shop_id"
+            },
+            {
+              "fieldLabel": "content",
+              "fieldType": "textarea"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        0
+      ],
+      "id": "5e6c1405-98b6-490d-9a50-09bb1dbee9d8",
+      "name": "On form submission",
+      "webhookId": "19f3819c-f4de-4448-b0ef-7044f135fb49"
+    },
+    {
+      "parameters": {
+        "jsCode": "const shopId = $('On form submission').first().json.shop_id;\nconst raw = $('On form submission').first().json.content;\n\nreturn raw\n  .split(/\\n\\s*\\n/)\n  .map(c => c.trim())\n  .filter(Boolean)\n  .map(content => ({ json: { shop_id: shopId, content } }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "72217f59-3165-4d5a-b991-bda0c9816db0",
+      "name": "Split Chunks"
+    },
+    {
+      "parameters": {
+        "jsCode": "function normalizePersian(text) {\n  if (!text) return '';\n  return text\n    .replace(/ي/g, 'ی').replace(/ك/g, 'ک')\n    .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))\n    .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))\n    .replace(/\\u200c/g, ' ')\n    .replace(/\\s+/g, ' ').trim();\n}\n\nfor (const item of $input.all()) {\n  item.json.normalized = normalizePersian(item.json.content);\n}\nreturn $input.all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        0
+      ],
+      "id": "e938cf03-1f87-49d1-9ba0-726d79753418",
+      "name": "Normalize"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=<GEMINI_API_KEY>",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"models/gemini-embedding-001\",\n  \"content\": {\n    \"parts\": [\n      { \"text\": \"={{ $json.normalized }}\" }\n    ]\n  }\n}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        624,
+        0
+      ],
+      "id": "9923fb21-f721-498f-9e72-474ec5ffa2a6",
+      "name": "Gemini Embed"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://aaugvkrnnftgmorjpnoj.supabase.co/rest/v1/documents",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1040,
+        0
+      ],
+      "id": "9de83377-c99d-494a-96b2-eb9ad2af8be9",
+      "name": "Supabase Insert",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "0CmT4HAyc6wYbZx1",
+          "name": "Supabase Service Role"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const shopId = $('Split Chunks').item.json.shop_id;\nconst content = $('Split Chunks').item.json.content;\nconst embedding = $('Gemini Embed').item.json.embedding.values;\n\nreturn [{\n  json: {\n    shop_id: shopId,\n    content: content,\n    embedding: embedding\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        832,
+        0
+      ],
+      "id": "955a4caa-7dcf-4f2d-bcd4-74239b56f835",
+      "name": "Code in JavaScript"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Split Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Chunks": {
+      "main": [
+        [
+          {
+            "node": "Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize": {
+      "main": [
+        [
+          {
+            "node": "Gemini Embed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Embed": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Supabase Insert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "fd80d155-9c0e-4181-acd8-d8ed30929f42",
+  "meta": {
+    "instanceId": "0b831f78fcfdb49799a9474bd89c147b004db4006a5490c4b755b2bf552b9fd7"
+  },
+  "nodeGroups": [],
+  "id": "iROjmKKtpPvQ1buV",
+  "tags": []
+}
